@@ -17,7 +17,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Bot info
 APP_VERSION = "2.0.0"
-SUPPORTED_EXCHANGES = ["Binance", "Bybit", "Coinbase", "Kraken", "KuCoin", "OKX", "Hyperliquid"]  # ✅ UPDATED
+SUPPORTED_EXCHANGES = ["Binance", "Bybit", "Coinbase", "Kraken", "KuCoin", "OKX", "Hyperliquid"]
 
 # ============================================
 # BACKGROUND TASKS (AUTO-ALERTS)
@@ -183,7 +183,7 @@ async def commands(ctx):
     embed.add_field(
         name="🔍 Withdrawal Tools",
         value="`!withdraw-status <coin>` - Check deposit/withdraw status\n"
-              "`!track <network> <txid>` - Track a transaction\n"
+              "`!track <network> <txid>` - Track ANY transaction on SOL, ETH, BTC, BSC\n"
               "`!support` - Binance support links",
         inline=False
     )
@@ -521,59 +521,133 @@ async def withdraw_status(ctx, coin: str = None):
     await ctx.send(embed=embed)
 
 # ============================================
-# WITHDRAWAL TRACKING COMMANDS
+# ADVANCED TRANSACTION TRACKING
 # ============================================
 
 @bot.command()
 async def track(ctx, network: str, txid: str):
-    """Track a withdrawal transaction - !track BTC 123abc..."""
-    
-    # Network explorer links
-    explorers = {
-        "btc": "https://www.blockchain.com/explorer/transactions/btc/",
-        "eth": "https://etherscan.io/tx/",
-        "bsc": "https://bscscan.com/tx/",
-        "sol": "https://solscan.io/tx/",
-        "trx": "https://tronscan.org/#/transaction/",
-        "polygon": "https://polygonscan.com/tx/",
-        "arb": "https://arbiscan.io/tx/",
-        "op": "https://optimistic.etherscan.io/tx/",
-        "avax": "https://snowtrace.io/tx/",
-        "matic": "https://polygonscan.com/tx/"
-    }
+    """Track ANY transaction on Solana, Ethereum, BSC, Bitcoin, etc.
+    Usage: !track SOL 5W... or !track ETH 0x..."""
     
     network = network.lower()
     
+    # Network configurations
+    explorers = {
+        "sol": {
+            "name": "Solana",
+            "url": f"https://api.solscan.io/v1/transaction/{txid}",
+            "view": f"https://solscan.io/tx/{txid}",
+            "type": "solscan"
+        },
+        "eth": {
+            "name": "Ethereum",
+            "url": f"https://api.etherscan.io/api?module=transaction&action=gettxreceiptstatus&txhash={txid}&apikey=YourEtherscanKey",
+            "view": f"https://etherscan.io/tx/{txid}",
+            "type": "etherscan"
+        },
+        "bsc": {
+            "name": "BNB Smart Chain",
+            "url": f"https://api.bscscan.com/api?module=transaction&action=gettxreceiptstatus&txhash={txid}&apikey=YourBscScanKey",
+            "view": f"https://bscscan.com/tx/{txid}",
+            "type": "bscscan"
+        },
+        "btc": {
+            "name": "Bitcoin",
+            "url": f"https://blockchain.info/rawtx/{txid}",
+            "view": f"https://www.blockchain.com/explorer/transactions/btc/{txid}",
+            "type": "blockchain"
+        }
+    }
+    
     if network not in explorers:
         networks_list = "\n".join([f"• {key.upper()}" for key in explorers.keys()])
-        await ctx.send(f"❌ Unknown network. Available networks:\n{networks_list}")
+        await ctx.send(f"❌ Unknown network. Available:\n{networks_list}")
         return
     
-    explorer_url = explorers[network] + txid
+    explorer = explorers[network]
     
-    embed = discord.Embed(
-        title="🔍 Withdrawal Tracker",
-        description=f"Tracking transaction on **{network.upper()}** network",
-        color=0x00ff88
-    )
-    embed.add_field(
-        name="📋 Transaction ID (TXID)",
-        value=f"`{txid[:20]}...{txid[-10:] if len(txid) > 30 else ''}`",
-        inline=False
-    )
-    embed.add_field(
-        name="🔗 View on Explorer",
-        value=f"[Click here to view]({explorer_url})",
-        inline=False
-    )
-    embed.add_field(
-        name="📊 Status Check",
-        value="✅ **Transaction Found**\nClick the link above to see:\n• Confirmations\n• From/To addresses\n• Amount transferred",
-        inline=False
-    )
-    embed.set_footer(text="⚠️ This is a public transaction lookup. No personal data is accessed.")
+    # Show initial loading message
+    loading_msg = await ctx.send(f"🔍 Searching **{explorer['name']}** for transaction...")
     
-    await ctx.send(embed=embed)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(explorer['url']) as resp:
+                if resp.status != 200:
+                    await loading_msg.edit(content=f"❌ Transaction not found on {explorer['name']}. Check the TXID and try again.")
+                    return
+                data = await resp.json()
+        
+        # Different parsing logic for each explorer
+        if explorer['type'] == "solscan":
+            # Solana
+            if not data or data.get('success') == False:
+                await loading_msg.edit(content=f"❌ Transaction not found on Solana.")
+                return
+            tx_data = data.get('data', {})
+            status = "✅ SUCCESS" if tx_data.get('status') == 'success' else "❌ FAILED"
+            amount = tx_data.get('lamports', 0) / 1e9
+            timestamp = datetime.fromtimestamp(tx_data.get('blockTime', 0)).strftime('%Y-%m-%d %H:%M:%S UTC')
+            confirmations = "N/A"
+            from_addr = tx_data.get('from', 'N/A')
+            to_addr = tx_data.get('to', 'N/A')
+            fee = tx_data.get('fee', 0) / 1e9
+            
+            embed = discord.Embed(
+                title=f"🔍 Solana Transaction",
+                description=f"Status: {status}",
+                color=0x00ff88 if "SUCCESS" in status else 0xff4444
+            )
+            embed.add_field(name="💰 Amount", value=f"{amount:.4f} SOL", inline=True)
+            embed.add_field(name="⏱️ Time", value=timestamp, inline=True)
+            embed.add_field(name="✅ Confirmations", value=confirmations, inline=True)
+            embed.add_field(name="📤 From", value=f"`{from_addr[:8]}...{from_addr[-8:]}`", inline=False)
+            embed.add_field(name="📥 To", value=f"`{to_addr[:8]}...{to_addr[-8:]}`", inline=False)
+            embed.add_field(name="⛽ Fee", value=f"{fee:.6f} SOL", inline=True)
+            embed.add_field(name="🔗 Explorer", value=f"[View on Solscan]({explorer['view']})", inline=False)
+            embed.set_footer(text=f"TXID: {txid[:16]}...")
+            
+        elif explorer['type'] == "blockchain":
+            # Bitcoin
+            if not data:
+                await loading_msg.edit(content=f"❌ Transaction not found on Bitcoin.")
+                return
+            
+            status = "✅ SUCCESS"
+            amount = sum([out.get('value', 0) for out in data.get('out', [])]) / 1e8
+            timestamp = datetime.fromtimestamp(data.get('time', 0)).strftime('%Y-%m-%d %H:%M:%S UTC')
+            confirmations = data.get('block_height', 'N/A')
+            fee = data.get('fee', 0) / 1e8
+            
+            embed = discord.Embed(
+                title=f"🔍 Bitcoin Transaction",
+                description=f"Status: {status}",
+                color=0x00ff88
+            )
+            embed.add_field(name="💰 Amount", value=f"{amount:.8f} BTC", inline=True)
+            embed.add_field(name="⏱️ Time", value=timestamp, inline=True)
+            embed.add_field(name="✅ Confirmations", value=confirmations, inline=True)
+            embed.add_field(name="⛽ Fee", value=f"{fee:.8f} BTC", inline=True)
+            embed.add_field(name="🔗 Explorer", value=f"[View on Blockchain.com]({explorer['view']})", inline=False)
+            embed.set_footer(text=f"TXID: {txid[:16]}...")
+        
+        else:
+            # Ethereum / BSC - Simplified
+            embed = discord.Embed(
+                title=f"🔍 {explorer['name']} Transaction",
+                description="Click the link below to view full details on the explorer.",
+                color=0x3498db
+            )
+            embed.add_field(name="🔗 View on Explorer", value=f"[Click here to view]({explorer['view']})", inline=False)
+            embed.set_footer(text=f"TXID: {txid[:16]}...")
+        
+        await loading_msg.edit(content=None, embed=embed)
+    
+    except Exception as e:
+        await loading_msg.edit(content=f"❌ Error fetching transaction: {str(e)}")
+
+# ============================================
+# SUPPORT COMMAND
+# ============================================
 
 @bot.command()
 async def support(ctx, withdrawal_id: str = None):
