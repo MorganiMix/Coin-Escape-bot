@@ -16,7 +16,7 @@ intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Bot info
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 SUPPORTED_EXCHANGES = ["Binance", "Bybit", "Coinbase", "Kraken", "KuCoin", "OKX", "Hyperliquid"]
 
 # ============================================
@@ -24,8 +24,8 @@ SUPPORTED_EXCHANGES = ["Binance", "Bybit", "Coinbase", "Kraken", "KuCoin", "OKX"
 # ============================================
 
 @tasks.loop(minutes=5)
-async def check_exchange_status():
-    """Check exchange status every 5 minutes"""
+async def check_exchange_status_auto():
+    """Auto-check exchange status every 5 minutes with alerts"""
     channel_id = os.getenv('ALERT_CHANNEL_ID')
     if not channel_id:
         return
@@ -34,17 +34,34 @@ async def check_exchange_status():
     if not channel:
         return
     
-    # Check Binance
+    # Check Binance with deposit/withdraw status
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get("https://api.binance.com/api/v3/ping") as resp:
-                if resp.status == 200:
-                    status = "🟢 Online"
+            async with session.get("https://api.binance.com/api/v3/ping", timeout=10) as resp:
+                if resp.status != 200:
+                    await channel.send(f"🔴 **ALERT:** Binance is having issues! Status: {resp.status}")
                 else:
-                    status = "🔴 Offline"
-                    await channel.send(f"⚠️ **ALERT:** Binance is having issues! Status: {resp.status}")
-    except:
-        await channel.send("🔴 **ALERT:** Binance is not responding!")
+                    # Check deposit/withdraw status for BTC
+                    async with session.get("https://api.binance.com/api/v3/capital/config/getall") as status_resp:
+                        if status_resp.status == 200:
+                            data = await status_resp.json()
+                            for coin in data:
+                                if coin['coin'] == 'BTC':
+                                    networks = coin.get('networkList', [])
+                                    if networks:
+                                        deposit = networks[0].get('depositEnable')
+                                        withdraw = networks[0].get('withdrawEnable')
+                                        if not deposit or not withdraw:
+                                            await channel.send(
+                                                f"⚠️ **Binance ALERT:**\n"
+                                                f"BTC Deposits: {'✅' if deposit else '❌'}\n"
+                                                f"BTC Withdrawals: {'✅' if withdraw else '❌'}"
+                                            )
+                                    break
+    except asyncio.TimeoutError:
+        await channel.send("🔴 **ALERT:** Binance is not responding (timeout)!")
+    except Exception as e:
+        await channel.send(f"🔴 **ALERT:** Binance error: {str(e)[:50]}")
 
 @tasks.loop(hours=1)
 async def send_daily_report():
@@ -78,7 +95,7 @@ async def on_ready():
     print(f'🌐 Connected to {len(bot.guilds)} servers')
     
     # Start background tasks
-    check_exchange_status.start()
+    check_exchange_status_auto.start()
     send_daily_report.start()
     
     await bot.change_presence(activity=discord.Activity(
@@ -173,7 +190,7 @@ async def commands(ctx):
     )
     embed.add_field(
         name="📊 Exchange & Prices",
-        value="`!exchange-status` - Check exchange health\n"
+        value="`!exchange-status` - Check exchange health (with deposit/withdraw status)\n"
               "`!price <coin>` - Get crypto price\n"
               "`!btc` - Bitcoin price\n"
               "`!eth` - Ethereum price\n"
@@ -183,7 +200,7 @@ async def commands(ctx):
     embed.add_field(
         name="🔍 Withdrawal Tools",
         value="`!withdraw-status <coin>` - Check deposit/withdraw status\n"
-              "`!track <network> <txid>` - Track ANY transaction on SOL, ETH, BTC, BSC\n"
+              "`!track <network> <txid>` - Track ANY transaction (SOL, ETH, BTC, BSC)\n"
               "`!support` - Binance support links",
         inline=False
     )
@@ -282,7 +299,7 @@ async def server(ctx):
     await ctx.send(embed=embed)
 
 # ============================================
-# EXCHANGE COMMANDS
+# EXCHANGE COMMANDS (UPGRADED)
 # ============================================
 
 @bot.command()
@@ -299,82 +316,148 @@ async def exchanges(ctx):
 
 @bot.command()
 async def exchange_status(ctx, exchange: str = None):
-    """Check if an exchange is online"""
-    if not exchange:
-        embed = discord.Embed(
-            title="🔌 Exchange Status",
-            description="Checking all exchanges...",
-            color=0x3498db
+    """Check exchange status with deposit/withdrawal info"""
+    
+    # Define exchanges to check
+    exchanges = {
+        "binance": {
+            "name": "Binance",
+            "ping_url": "https://api.binance.com/api/v3/ping",
+            "status_url": "https://api.binance.com/api/v3/capital/config/getall",
+            "color": 0xf0b90b
+        },
+        "bybit": {
+            "name": "Bybit",
+            "ping_url": "https://api.bybit.com/v5/system/time",
+            "status_url": None,
+            "color": 0x00a8ff
+        },
+        "coinbase": {
+            "name": "Coinbase",
+            "ping_url": "https://api.coinbase.com/v2/time",
+            "status_url": None,
+            "color": 0x0052ff
+        },
+        "kraken": {
+            "name": "Kraken",
+            "ping_url": "https://api.kraken.com/0/public/SystemStatus",
+            "status_url": None,
+            "color": 0x7c4dff
+        },
+        "kucoin": {
+            "name": "KuCoin",
+            "ping_url": "https://api.kucoin.com/api/v1/status",
+            "status_url": None,
+            "color": 0x00b4d8
+        },
+        "okx": {
+            "name": "OKX",
+            "ping_url": "https://www.okx.com/api/v5/system/status",
+            "status_url": None,
+            "color": 0x000000
+        },
+        "hyperliquid": {
+            "name": "Hyperliquid",
+            "ping_url": "https://api.hyperliquid.xyz/info",
+            "status_url": None,
+            "color": 0x7b61ff
+        }
+    }
+    
+    # If specific exchange requested
+    if exchange:
+        exchange = exchange.lower()
+        if exchange not in exchanges:
+            available = "\n".join([f"• {key.upper()}" for key in exchanges.keys()])
+            await ctx.send(f"❌ Unknown exchange. Available:\n{available}")
+            return
+        exchanges = {exchange: exchanges[exchange]}
+    
+    # Check each exchange
+    results = []
+    for key, ex in exchanges.items():
+        try:
+            start_time = datetime.now()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(ex['ping_url'], timeout=10) as resp:
+                    end_time = datetime.now()
+                    response_time = (end_time - start_time).total_seconds() * 1000
+                    
+                    if resp.status == 200:
+                        status = "🟢 Online"
+                    else:
+                        status = f"🟡 Warning (Status: {resp.status})"
+                    
+                    # Try to get deposit/withdraw status (Binance only)
+                    deposit_status = "N/A"
+                    withdraw_status = "N/A"
+                    
+                    if key == "binance" and ex['status_url']:
+                        try:
+                            async with session.get(ex['status_url']) as status_resp:
+                                if status_resp.status == 200:
+                                    data = await status_resp.json()
+                                    # Check BTC deposit/withdraw status
+                                    for coin in data:
+                                        if coin['coin'] == 'BTC':
+                                            networks = coin.get('networkList', [])
+                                            if networks:
+                                                deposit_status = "✅ Enabled" if networks[0].get('depositEnable') else "❌ Disabled"
+                                                withdraw_status = "✅ Enabled" if networks[0].get('withdrawEnable') else "❌ Disabled"
+                                            break
+                        except:
+                            pass
+                    
+                    results.append({
+                        "name": ex['name'],
+                        "status": status,
+                        "response_time": f"{response_time:.0f}ms",
+                        "deposit": deposit_status,
+                        "withdraw": withdraw_status,
+                        "color": ex['color']
+                    })
+        except asyncio.TimeoutError:
+            results.append({
+                "name": ex['name'],
+                "status": "🔴 Offline (Timeout)",
+                "response_time": ">10s",
+                "deposit": "N/A",
+                "withdraw": "N/A",
+                "color": 0xff4444
+            })
+        except Exception as e:
+            results.append({
+                "name": ex['name'],
+                "status": f"🔴 Error: {str(e)[:30]}",
+                "response_time": "N/A",
+                "deposit": "N/A",
+                "withdraw": "N/A",
+                "color": 0xff4444
+            })
+    
+    # Build the embed
+    embed = discord.Embed(
+        title="🔌 Exchange Status Scanner",
+        description="Real-time status of all supported exchanges",
+        color=0x3498db
+    )
+    
+    for result in results:
+        status_text = (
+            f"Status: {result['status']}\n"
+            f"Response: {result['response_time']}\n"
+            f"Deposits: {result['deposit']}\n"
+            f"Withdrawals: {result['withdraw']}"
         )
-        
-        # Check Binance
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get("https://api.binance.com/api/v3/ping") as resp:
-                    status = "🟢 Online" if resp.status == 200 else "🔴 Offline"
-                    embed.add_field(name="Binance", value=status, inline=True)
-        except:
-            embed.add_field(name="Binance", value="🔴 Offline", inline=True)
-        
-        # Check Bybit
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get("https://api.bybit.com/v5/system/time") as resp:
-                    status = "🟢 Online" if resp.status == 200 else "🔴 Offline"
-                    embed.add_field(name="Bybit", value=status, inline=True)
-        except:
-            embed.add_field(name="Bybit", value="🔴 Offline", inline=True)
-        
-        # Check Coinbase
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get("https://api.coinbase.com/v2/time") as resp:
-                    status = "🟢 Online" if resp.status == 200 else "🔴 Offline"
-                    embed.add_field(name="Coinbase", value=status, inline=True)
-        except:
-            embed.add_field(name="Coinbase", value="🔴 Offline", inline=True)
-        
-        embed.set_footer(text=f"Last checked: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        await ctx.send(embed=embed)
-        return
+        embed.add_field(
+            name=f"**{result['name']}**",
+            value=status_text,
+            inline=False
+        )
     
-    # Check specific exchange
-    exchange = exchange.lower()
-    if exchange == "binance":
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get("https://api.binance.com/api/v3/ping") as resp:
-                    if resp.status == 200:
-                        await ctx.send(f"🟢 **Binance** is online!")
-                    else:
-                        await ctx.send(f"🔴 **Binance** is offline (Status: {resp.status})")
-        except:
-            await ctx.send("🔴 **Binance** is not responding!")
+    embed.set_footer(text=f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
     
-    elif exchange == "bybit":
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get("https://api.bybit.com/v5/system/time") as resp:
-                    if resp.status == 200:
-                        await ctx.send(f"🟢 **Bybit** is online!")
-                    else:
-                        await ctx.send(f"🔴 **Bybit** is offline (Status: {resp.status})")
-        except:
-            await ctx.send("🔴 **Bybit** is not responding!")
-    
-    elif exchange == "coinbase":
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get("https://api.coinbase.com/v2/time") as resp:
-                    if resp.status == 200:
-                        await ctx.send(f"🟢 **Coinbase** is online!")
-                    else:
-                        await ctx.send(f"🔴 **Coinbase** is offline (Status: {resp.status})")
-        except:
-            await ctx.send("🔴 **Coinbase** is not responding!")
-    
-    else:
-        await ctx.send(f"❌ Unknown exchange. Available: `binance`, `bybit`, `coinbase`")
+    await ctx.send(embed=embed)
 
 # ============================================
 # PRICE COMMANDS
@@ -710,5 +793,5 @@ if __name__ == "__main__":
     if not TOKEN:
         print("❌ ERROR: No token found! Create a .env file with DISCORD_TOKEN=your_token")
     else:
-        print("🚀 Starting Coin Escape Bot v2.0...")
+        print("🚀 Starting Coin Escape Bot v2.1...")
         bot.run(TOKEN)
