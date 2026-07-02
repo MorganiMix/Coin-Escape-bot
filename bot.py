@@ -182,7 +182,7 @@ async def commands(ctx):
     )
     embed.add_field(
         name="🔍 Withdrawal Tools",
-        value="`!status <coin>` - Check deposit/withdraw status\n"
+        value="`!withdraw-status <coin>` - Check deposit/withdraw status\n"
               "`!track <network> <txid>` - Track a transaction\n"
               "`!support` - Binance support links",
         inline=False
@@ -454,11 +454,11 @@ async def sol(ctx):
 # ============================================
 
 @bot.command()
-async def status(ctx, coin: str = None):
-    """Check deposit/withdrawal status for a specific coin (e.g., !status BTC)"""
+async def withdraw_status(ctx, coin: str = None):
+    """Check deposit/withdrawal status for a specific coin (e.g., !withdraw-status BTC)"""
     
     if not coin:
-        await ctx.send("❌ Please specify a coin. Example: `!status BTC` or `!status ETH`")
+        await ctx.send("❌ Please specify a coin. Example: `!withdraw-status BTC` or `!withdraw-status ETH`")
         return
     
     coin = coin.upper()
@@ -489,7 +489,7 @@ async def status(ctx, coin: str = None):
     embed = discord.Embed(
         title=f"🌐 {coin} Network Status",
         description=f"Deposit & Withdrawal status for **{coin}**",
-        color=0xf0b90b  # Binance yellow
+        color=0xf0b90b
     )
     
     network_list = coin_data.get('networkList', [])
@@ -497,7 +497,7 @@ async def status(ctx, coin: str = None):
     if not network_list:
         embed.add_field(name="⚠️ No networks available", value="No network data found for this coin.", inline=False)
     else:
-        for network in network_list[:10]:  # Max 10 networks per coin
+        for network in network_list[:10]:
             network_name = network.get('network', 'Unknown')
             deposit = network.get('depositEnable', False)
             withdraw = network.get('withdrawEnable', False)
@@ -507,7 +507,6 @@ async def status(ctx, coin: str = None):
             
             status_text = f"**Deposit:** {deposit_emoji} | **Withdraw:** {withdraw_emoji}"
             
-            # Add extra info if available
             min_confirm = network.get('minConfirm', 'N/A')
             if min_confirm != 'N/A':
                 status_text += f"\n`Confirmations: {min_confirm}`"
@@ -591,7 +590,7 @@ async def support(ctx, withdrawal_id: str = None):
             name="📧 Binance Support Center",
             value="[Open Support Ticket](https://www.binance.com/en/support/ticket)\n\n"
                   "**Before contacting support, please check:**\n"
-                  "• Network status with `!status BTC`\n"
+                  "• Network status with `!withdraw-status BTC`\n"
                   "• Your withdrawal status in Binance app\n"
                   "• If you have the TXID, use `!track`",
             inline=False
