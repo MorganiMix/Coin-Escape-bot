@@ -17,7 +17,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Bot info
 APP_VERSION = "2.0.0"
-SUPPORTED_EXCHANGES = ["Binance", "Bybit", "Coinbase", "Kraken", "KuCoin", "OKX", "Deribit"]
+SUPPORTED_EXCHANGES = ["Binance", "Bybit", "Coinbase", "Kraken", "KuCoin", "OKX", "Hyperliquid"]  # ✅ UPDATED
 
 # ============================================
 # BACKGROUND TASKS (AUTO-ALERTS)
