@@ -87,8 +87,9 @@ async def on_ready():
 
 @bot.event
 async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        await ctx.send(f"❌ Unknown command. Type `!commands` for available commands.")
+    """Fixed error handler - uses full exception path"""
+    if isinstance(error, discord.ext.commands.errors.CommandNotFound):
+        await ctx.send(f"❌ Unknown command. Type `!help` for available commands.")
     else:
         await ctx.send(f"❌ Error: {str(error)}")
         print(f"Error: {error}")
@@ -145,8 +146,12 @@ async def security(ctx):
     embed.set_footer(text="Your keys, your control")
     await ctx.send(embed=embed)
 
+# ============================================
+# HELP COMMAND (was 'commands' - fixed name conflict)
+# ============================================
+
 @bot.command()
-async def commands(ctx):
+async def help(ctx):
     """List all available commands"""
     embed = discord.Embed(
         title="📋 Coin Escape Commands",
@@ -159,7 +164,7 @@ async def commands(ctx):
               "`!about` - About Coin Escape\n"
               "`!version` - Show version\n"
               "`!status` - Bot status\n"
-              "`!commands` - Show this menu",
+              "`!help` - Show this menu",
         inline=False
     )
     embed.add_field(
