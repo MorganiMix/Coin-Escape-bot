@@ -149,7 +149,7 @@ async def security(ctx):
     await ctx.send(embed=embed)
 
 # ============================================
-# HELP COMMAND (fixed conflict with built-in help)
+# HELP COMMAND (FIXED - shows correct command names)
 # ============================================
 
 @bot.command()
@@ -179,7 +179,7 @@ async def help(ctx):
     )
     embed.add_field(
         name="📊 Exchange & Prices",
-        value="`!exchange-status` - Check if exchanges are online\n"
+        value="`!exchange_status` - Check if exchanges are online\n"
               "`!price <coin>` - Get crypto price\n"
               "`!btc` - Bitcoin price\n"
               "`!eth` - Ethereum price\n"
@@ -190,11 +190,44 @@ async def help(ctx):
         name="🔍 Withdrawal Tools",
         value="`!withdraw-status <coin>` - Check deposit/withdraw status\n"
               "`!track <network> <txid>` - Track ANY transaction (SOL, ETH, BTC, BSC)\n"
-              "`!support` - Binance support links",
+              "`!support` - Binance support links\n"
+              "`!coins` - Check top 10 coins deposit/withdraw status",
         inline=False
     )
     embed.set_footer(text="🔄 Automation features active")
     await ctx.send(embed=embed)
+
+# ============================================
+# TEST COMMANDS WITH COPY BUTTON
+# ============================================
+
+@bot.command()
+async def testcmds(ctx):
+    """Get a copyable list of test commands"""
+    commands_text = (
+        "!help\n"
+        "!exchange_status\n"
+        "!exchange_status binance\n"
+        "!withdraw-status BTC\n"
+        "!btc\n"
+        "!ping"
+    )
+    
+    class CopyButton(discord.ui.View):
+        @discord.ui.button(label="📋 Copy All Commands", style=discord.ButtonStyle.primary)
+        async def copy_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await interaction.response.send_message(f"```\n{commands_text}\n```", ephemeral=True)
+    
+    embed = discord.Embed(
+        title="📋 Test Commands",
+        description="Click the button below to copy all test commands to your clipboard.",
+        color=0x00ff88
+    )
+    await ctx.send(embed=embed, view=CopyButton())
+
+# ============================================
+# GUIDE, FAQ, STATUS, VERSION, COINFLIP, SERVER
+# ============================================
 
 @bot.command()
 async def guide(ctx):
@@ -304,7 +337,7 @@ async def exchanges(ctx):
     await ctx.send(embed=embed)
 
 # ============================================
-# SIMPLIFIED & RELIABLE EXCHANGE STATUS SCANNER
+# EXCHANGE STATUS SCANNER (ONLINE/OFFLINE)
 # ============================================
 
 @bot.command()
@@ -391,6 +424,66 @@ async def exchange_status(ctx, exchange: str = None):
     await ctx.send(embed=embed)
 
 # ============================================
+# COINS SCANNER (TOP 10 DEPOSIT/WITHDRAW STATUS)
+# ============================================
+
+@bot.command()
+async def coins(ctx):
+    """Check deposit/withdrawal status for top 10 coins"""
+    
+    # Top 10 coins to check
+    coin_list = ["BTC", "ETH", "USDT", "BNB", "SOL", "XRP", "ADA", "DOGE", "DOT", "AVAX"]
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get("https://api.binance.com/api/v3/capital/config/getall") as resp:
+                if resp.status != 200:
+                    await ctx.send("❌ Failed to fetch coin status from Binance.")
+                    return
+                data = await resp.json()
+        except:
+            await ctx.send("❌ Error connecting to Binance API.")
+            return
+    
+    # Build the embed
+    embed = discord.Embed(
+        title="🪙 Binance Coin Status (Top 10)",
+        description="Deposit & Withdrawal status for the most popular coins",
+        color=0xf0b90b
+    )
+    
+    status_text = ""
+    for coin_name in coin_list:
+        coin_data = None
+        for item in data:
+            if item['coin'] == coin_name:
+                coin_data = item
+                break
+        
+        if not coin_data:
+            status_text += f"**{coin_name}** ❌ No data\n"
+            continue
+        
+        network_list = coin_data.get('networkList', [])
+        if not network_list:
+            status_text += f"**{coin_name}** ❌ No networks\n"
+            continue
+        
+        # Check if any network has deposit/withdraw enabled
+        deposit_enabled = any(n.get('depositEnable', False) for n in network_list)
+        withdraw_enabled = any(n.get('withdrawEnable', False) for n in network_list)
+        
+        deposit_emoji = "✅" if deposit_enabled else "❌"
+        withdraw_emoji = "✅" if withdraw_enabled else "❌"
+        
+        status_text += f"**{coin_name}** {deposit_emoji} Deposit  {withdraw_emoji} Withdraw\n"
+    
+    embed.add_field(name="Status", value=status_text, inline=False)
+    embed.set_footer(text=f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    
+    await ctx.send(embed=embed)
+
+# ============================================
 # PRICE COMMANDS
 # ============================================
 
@@ -464,7 +557,7 @@ async def sol(ctx):
     await price(ctx, "solana")
 
 # ============================================
-# BINANCE NETWORK STATUS (Deposit/Withdrawal)
+# BINANCE NETWORK STATUS (ONE COIN)
 # ============================================
 
 @bot.command()
