@@ -6,10 +6,15 @@ import aiohttp
 import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
+import tweepy          # NEW
+import re              # NEW
+import json            # NEW
+from datetime import timedelta  # NEW
 
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
+BEARER_TOKEN = os.getenv('BEARER_TOKEN')  # NEW
 
 # Bot configuration
 intents = discord.Intents.all()
@@ -21,6 +26,92 @@ bot.remove_command('help')
 # Bot info
 APP_VERSION = "2.1.0"
 SUPPORTED_EXCHANGES = ["Binance", "Bybit", "Coinbase", "Kraken", "KuCoin", "OKX", "Hyperliquid"]
+
+# ============================================
+# TWITTER FUD / LARGE WITHDRAWAL ALERTS (NEW)
+# ============================================
+
+TWITTER_CLIENT = tweepy.Client(bearer_token=BEARER_TOKEN) if BEARER_TOKEN else None
+PROCESSED_FILE = "processed_tweets.json"
+WITHDRAWAL_THRESHOLD = {
+    "BTC": 100,
+    "ETH": 1000,
+    "USDT": 1000000,
+    "USDC": 1000000,
+    "DAI": 1000000,
+    "XRP": 100000,
+    "ADA": 100000,
+    "SOL": 10000,
+    "DOT": 10000,
+    "AVAX": 10000
+}
+
+def load_processed_ids():
+    try:
+        with open(PROCESSED_FILE, "r") as f:
+            return set(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+def save_processed_ids(ids):
+    with open(PROCESSED_FILE, "w") as f:
+        json.dump(list(ids), f)
+
+def extract_large_amount(text):
+    """Return (amount, unit) if a large withdrawal is mentioned."""
+    pattern = r'(\d{1,3}(?:,\d{3})*)\s*(BTC|ETH|USDT|USDC|DAI|XRP|ADA|SOL|DOT|AVAX)'
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        raw = match.group(1).replace(",", "")
+        amount = float(raw)
+        unit = match.group(2).upper()
+        if amount >= WITHDRAWAL_THRESHOLD.get(unit, 0):
+            return amount, unit
+    return None, None
+
+def fetch_twitter_fud_tweets():
+    """Synchronous fetch – runs in a thread."""
+    if not TWITTER_CLIENT:
+        return []
+    query = (
+        "(exchange OR binance OR coinbase OR kraken OR bybit OR ftx OR celsius OR blockfi) "
+        "AND (fud OR withdraw* OR outflow* OR \"bank run\" OR large OR massive OR panic) "
+        "-is:retweet -is:reply lang:en"
+    )
+    end_time = datetime.utcnow()
+    start_time = end_time - timedelta(hours=24)
+    try:
+        tweets = TWITTER_CLIENT.search_recent_tweets(
+            query=query,
+            tweet_fields=["created_at", "author_id"],
+            max_results=100,
+            start_time=start_time.isoformat(timespec="seconds") + "Z",
+            end_time=end_time.isoformat(timespec="seconds") + "Z"
+        )
+        return tweets.data if tweets.data else []
+    except Exception as e:
+        print(f"Twitter API error: {e}")
+        return []
+
+async def get_twitter_alerts():
+    """Async wrapper – fetches new tweets and filters them."""
+    processed = load_processed_ids()
+    new_alerts = []
+    tweets = await asyncio.to_thread(fetch_twitter_fud_tweets)
+    for tweet in tweets:
+        if tweet.id in processed:
+            continue
+        amount, unit = extract_large_amount(tweet.text)
+        if amount:
+            new_alerts.append({
+                "id": tweet.id,
+                "text": tweet.text[:200],
+                "url": f"https://twitter.com/i/web/status/{tweet.id}",
+                "detail": f"{amount:,.0f} {unit}",
+                "created_at": tweet.created_at
+            })
+        processed.add(tweet.id)
+    save_processed_ids(processed)
+    return new_alerts
 
 # ============================================
 # BACKGROUND TASKS (AUTO-ALERTS)
@@ -69,6 +160,35 @@ async def send_daily_report():
     except:
         await channel.send("⚠️ Could not fetch price data")
 
+@tasks.loop(hours=24)
+async def send_twitter_fud_report():
+    """Post Twitter FUD/large-withdrawal alerts to the alert channel every 24h."""
+    if not BEARER_TOKEN:
+        return
+    channel_id = os.getenv('ALERT_CHANNEL_ID')
+    if not channel_id:
+        return
+    channel = bot.get_channel(int(channel_id))
+    if not channel:
+        return
+    alerts = await get_twitter_alerts()
+    if not alerts:
+        return
+    embed = discord.Embed(
+        title="🚨 Daily Exchange FUD & Large Withdrawal Alerts",
+        description="Tweets mentioning large outflows or FUD in the last 24 hours:",
+        color=0xff5500,
+        timestamp=datetime.utcnow()
+    )
+    for alert in alerts[:10]:
+        embed.add_field(
+            name=f"{alert['detail']}",
+            value=f"{alert['text']}... [Link]({alert['url']})",
+            inline=False
+        )
+    embed.set_footer(text="Alerts auto-generated every 24h")
+    await channel.send(embed=embed)
+
 # ============================================
 # EVENTS
 # ============================================
@@ -82,6 +202,7 @@ async def on_ready():
     # Start background tasks
     check_exchange_status_auto.start()
     send_daily_report.start()
+    send_twitter_fud_report.start()   # NEW
     
     await bot.change_presence(activity=discord.Activity(
         type=discord.ActivityType.watching,
@@ -191,7 +312,8 @@ async def help(ctx):
         value="`!withdraw-status <coin>` - Check deposit/withdraw status\n"
               "`!track <network> <txid>` - Track ANY transaction (SOL, ETH, BTC, BSC)\n"
               "`!support` - Binance support links\n"
-              "`!coins` - Check top 10 coins deposit/withdraw status",
+              "`!coins` - Check top 10 coins deposit/withdraw status\n"
+              "`!fud` - Scan Twitter for exchange FUD/large withdrawals",  # NEW
         inline=False
     )
     embed.set_footer(text="🔄 Automation features active")
@@ -807,6 +929,37 @@ async def support(ctx, withdrawal_id: str = None):
     )
     embed.set_footer(text="🚨 Contact support immediately for any issues with your funds.")
     
+    await ctx.send(embed=embed)
+
+# ============================================
+# FUD COMMAND (MANUAL TWITTER CHECK)
+# ============================================
+
+@bot.command()
+async def fud(ctx):
+    """Manually check for recent exchange FUD/large withdrawal tweets."""
+    if not BEARER_TOKEN:
+        await ctx.send("❌ Twitter API not configured. Please set BEARER_TOKEN in .env")
+        return
+    await ctx.send("🔍 Scanning Twitter for exchange FUD and large withdrawals...")
+    alerts = await get_twitter_alerts()
+    if not alerts:
+        await ctx.send("✅ No new large withdrawal or FUD tweets in the last 24 hours.")
+        return
+    embed = discord.Embed(
+        title="🚨 Exchange FUD & Large Withdrawal Alerts",
+        description=f"Found **{len(alerts)}** new alerts:",
+        color=0xff5500,
+        timestamp=datetime.utcnow()
+    )
+    for alert in alerts[:10]:
+        embed.add_field(
+            name=f"{alert['detail']}",
+            value=f"{alert['text']}... [Link]({alert['url']})",
+            inline=False
+        )
+    if len(alerts) > 10:
+        embed.set_footer(text=f"Showing first 10 of {len(alerts)} alerts")
     await ctx.send(embed=embed)
 
 # ============================================
