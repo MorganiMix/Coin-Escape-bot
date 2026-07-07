@@ -33,18 +33,34 @@ SUPPORTED_EXCHANGES = ["Binance", "Bybit", "Coinbase", "Kraken", "KuCoin", "OKX"
 
 TWITTER_CLIENT = tweepy.Client(bearer_token=BEARER_TOKEN) if BEARER_TOKEN else None
 PROCESSED_FILE = "processed_tweets.json"
+
+# LOWERED THRESHOLDS - Much more sensitive!
 WITHDRAWAL_THRESHOLD = {
-    "BTC": 100,
-    "ETH": 1000,
-    "USDT": 1000000,
-    "USDC": 1000000,
-    "DAI": 1000000,
-    "XRP": 100000,
-    "ADA": 100000,
-    "SOL": 10000,
-    "DOT": 10000,
-    "AVAX": 10000
+    "BTC": 10,
+    "ETH": 100,
+    "USDT": 100000,
+    "USDC": 100000,
+    "DAI": 100000,
+    "XRP": 10000,
+    "ADA": 10000,
+    "SOL": 1000,
+    "DOT": 1000,
+    "AVAX": 1000
 }
+
+# Catch tweets that have NO amount but are still panic-worthy
+FUD_TRIGGER_WORDS = [
+    "bank run",
+    "insolvent",
+    "freeze withdrawals",
+    "halt withdrawals",
+    "collapse",
+    "hack",
+    "exploit",
+    "panic",
+    "suspends withdrawals",
+    "liquidity crisis"
+]
 
 # Status tracking for the FUD report
 fud_last_run = None
@@ -61,16 +77,29 @@ def save_processed_ids(ids):
     with open(PROCESSED_FILE, "w") as f:
         json.dump(list(ids), f)
 
-def extract_large_amount(text):
-    """Return (amount, unit) if a large withdrawal is mentioned."""
+def analyze_tweet(text):
+    """
+    Returns: (amount, unit, reason)
+    - If a large amount is found: returns (amount, unit, "💰 Large Withdrawal")
+    - If FUD keywords are found: returns (None, None, "🔥 FUD Panic Alert")
+    - Otherwise: returns (None, None, None)
+    """
+    # 1. Check for a numeric withdrawal
     pattern = r'(\d{1,3}(?:,\d{3})*)\s*(BTC|ETH|USDT|USDC|DAI|XRP|ADA|SOL|DOT|AVAX)'
     for match in re.finditer(pattern, text, re.IGNORECASE):
         raw = match.group(1).replace(",", "")
         amount = float(raw)
         unit = match.group(2).upper()
         if amount >= WITHDRAWAL_THRESHOLD.get(unit, 0):
-            return amount, unit
-    return None, None
+            return amount, unit, "💰 Large Withdrawal"
+    
+    # 2. If no amount found, check for strong FUD keywords
+    text_lower = text.lower()
+    for word in FUD_TRIGGER_WORDS:
+        if word in text_lower:
+            return None, None, "🔥 FUD Panic Alert"
+    
+    return None, None, None
 
 def fetch_twitter_fud_tweets():
     """Synchronous fetch – runs in a thread."""
@@ -78,7 +107,7 @@ def fetch_twitter_fud_tweets():
         return []
     query = (
         "(exchange OR binance OR coinbase OR kraken OR bybit OR ftx OR celsius OR blockfi) "
-        "AND (fud OR withdraw* OR outflow* OR \"bank run\" OR large OR massive OR panic) "
+        "AND (fud OR withdraw* OR outflow* OR \"bank run\" OR large OR massive OR panic OR freeze OR halt) "
         "-is:retweet -is:reply lang:en"
     )
     end_time = datetime.utcnow()
@@ -101,19 +130,34 @@ async def get_twitter_alerts():
     processed = load_processed_ids()
     new_alerts = []
     tweets = await asyncio.to_thread(fetch_twitter_fud_tweets)
+    
     for tweet in tweets:
         if tweet.id in processed:
             continue
-        amount, unit = extract_large_amount(tweet.text)
+        
+        amount, unit, reason = analyze_tweet(tweet.text)
+        
         if amount:
+            # Amount-based alert
             new_alerts.append({
                 "id": tweet.id,
                 "text": tweet.text[:200],
                 "url": f"https://twitter.com/i/web/status/{tweet.id}",
-                "detail": f"{amount:,.0f} {unit}",
+                "detail": f"{amount:,.0f} {unit} - {reason}",
                 "created_at": tweet.created_at
             })
+        elif unit is None and reason:  # FUD alert without amount
+            new_alerts.append({
+                "id": tweet.id,
+                "text": tweet.text[:200],
+                "url": f"https://twitter.com/i/web/status/{tweet.id}",
+                "detail": reason,
+                "created_at": tweet.created_at
+            })
+        # Otherwise ignore
+        
         processed.add(tweet.id)
+    
     save_processed_ids(processed)
     return new_alerts
 
@@ -322,7 +366,7 @@ async def help(ctx):
               "`!support` - Binance support links\n"
               "`!coins` - Check top 10 coins deposit/withdraw status\n"
               "`!fud` - Scan Twitter for exchange FUD/large withdrawals\n"
-              "`!fud_status` - Show status of the FUD alert system",  # NEW
+              "`!fud_status` - Show status of the FUD alert system",
         inline=False
     )
     embed.set_footer(text="🔄 Automation features active")
