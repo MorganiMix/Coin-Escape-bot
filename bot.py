@@ -16,9 +16,6 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 
 # ---------- TWITTER BEARER TOKEN ----------
 BEARER_TOKEN = os.getenv('BEARER_TOKEN')
-if not BEARER_TOKEN:
-    # ⚠️ REPLACE THIS WITH YOUR ACTUAL TOKEN (keep the quotes)
-    BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANIZ%2BgEAAAAAMO6tGMGBQyQf7K9Ap1gweXR3yQs%3DVYFkTPddMR7wl4IQQSWcNzWFQgZmN1iY1ThzO5IfaHnnYheTcb"
 
 # Bot configuration
 intents = discord.Intents.all()
