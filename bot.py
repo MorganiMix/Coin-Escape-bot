@@ -6,15 +6,15 @@ import aiohttp
 import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
-import tweepy          # NEW
-import re              # NEW
-import json            # NEW
-from datetime import timedelta  # NEW
+import tweepy
+import re
+import json
+from datetime import timedelta
 
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-BEARER_TOKEN = os.getenv('BEARER_TOKEN')  # NEW
+BEARER_TOKEN = os.getenv('BEARER_TOKEN')
 
 # Bot configuration
 intents = discord.Intents.all()
@@ -28,7 +28,7 @@ APP_VERSION = "2.1.0"
 SUPPORTED_EXCHANGES = ["Binance", "Bybit", "Coinbase", "Kraken", "KuCoin", "OKX", "Hyperliquid"]
 
 # ============================================
-# TWITTER FUD / LARGE WITHDRAWAL ALERTS (NEW)
+# TWITTER FUD / LARGE WITHDRAWAL ALERTS
 # ============================================
 
 TWITTER_CLIENT = tweepy.Client(bearer_token=BEARER_TOKEN) if BEARER_TOKEN else None
@@ -45,6 +45,10 @@ WITHDRAWAL_THRESHOLD = {
     "DOT": 10000,
     "AVAX": 10000
 }
+
+# Status tracking for the FUD report
+fud_last_run = None
+fud_last_count = 0
 
 def load_processed_ids():
     try:
@@ -163,6 +167,7 @@ async def send_daily_report():
 @tasks.loop(hours=24)
 async def send_twitter_fud_report():
     """Post Twitter FUD/large-withdrawal alerts to the alert channel every 24h."""
+    global fud_last_run, fud_last_count
     if not BEARER_TOKEN:
         return
     channel_id = os.getenv('ALERT_CHANNEL_ID')
@@ -172,6 +177,9 @@ async def send_twitter_fud_report():
     if not channel:
         return
     alerts = await get_twitter_alerts()
+    # Update status
+    fud_last_run = datetime.utcnow()
+    fud_last_count = len(alerts)
     if not alerts:
         return
     embed = discord.Embed(
@@ -202,7 +210,7 @@ async def on_ready():
     # Start background tasks
     check_exchange_status_auto.start()
     send_daily_report.start()
-    send_twitter_fud_report.start()   # NEW
+    send_twitter_fud_report.start()
     
     await bot.change_presence(activity=discord.Activity(
         type=discord.ActivityType.watching,
@@ -270,7 +278,7 @@ async def security(ctx):
     await ctx.send(embed=embed)
 
 # ============================================
-# HELP COMMAND (FIXED - shows correct command names)
+# HELP COMMAND
 # ============================================
 
 @bot.command()
@@ -313,7 +321,8 @@ async def help(ctx):
               "`!track <network> <txid>` - Track ANY transaction (SOL, ETH, BTC, BSC)\n"
               "`!support` - Binance support links\n"
               "`!coins` - Check top 10 coins deposit/withdraw status\n"
-              "`!fud` - Scan Twitter for exchange FUD/large withdrawals",  # NEW
+              "`!fud` - Scan Twitter for exchange FUD/large withdrawals\n"
+              "`!fud_status` - Show status of the FUD alert system",  # NEW
         inline=False
     )
     embed.set_footer(text="🔄 Automation features active")
@@ -459,7 +468,7 @@ async def exchanges(ctx):
     await ctx.send(embed=embed)
 
 # ============================================
-# EXCHANGE STATUS SCANNER (ONLINE/OFFLINE)
+# EXCHANGE STATUS SCANNER
 # ============================================
 
 @bot.command()
@@ -546,7 +555,7 @@ async def exchange_status(ctx, exchange: str = None):
     await ctx.send(embed=embed)
 
 # ============================================
-# COINS SCANNER (TOP 10 DEPOSIT/WITHDRAW STATUS)
+# COINS SCANNER
 # ============================================
 
 @bot.command()
@@ -932,7 +941,7 @@ async def support(ctx, withdrawal_id: str = None):
     await ctx.send(embed=embed)
 
 # ============================================
-# FUD COMMAND (MANUAL TWITTER CHECK)
+# FUD COMMANDS
 # ============================================
 
 @bot.command()
@@ -960,6 +969,43 @@ async def fud(ctx):
         )
     if len(alerts) > 10:
         embed.set_footer(text=f"Showing first 10 of {len(alerts)} alerts")
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def fud_status(ctx):
+    """Show status of the FUD alert system."""
+    embed = discord.Embed(
+        title="📊 FUD Alert System Status",
+        color=0x3498db
+    )
+    if fud_last_run:
+        embed.add_field(
+            name="Last Auto-Run",
+            value=f"{fud_last_run.strftime('%Y-%m-%d %H:%M:%S')} UTC",
+            inline=False
+        )
+        embed.add_field(
+            name="Tweets Found (last run)",
+            value=str(fud_last_count),
+            inline=True
+        )
+    else:
+        embed.add_field(
+            name="Status",
+            value="No auto-run has occurred yet.",
+            inline=False
+        )
+    embed.add_field(
+        name="Auto-Interval",
+        value="Every 24 hours",
+        inline=True
+    )
+    embed.add_field(
+        name="Manual Command",
+        value="!fud",
+        inline=True
+    )
+    embed.set_footer(text="processed_tweets.json tracks seen tweets")
     await ctx.send(embed=embed)
 
 # ============================================
