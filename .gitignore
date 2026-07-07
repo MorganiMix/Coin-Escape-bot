@@ -19,3 +19,6 @@ env/
 .idea/
 *.swp
 *.swo
+
+# Twitter cache
+processed_tweets.json
